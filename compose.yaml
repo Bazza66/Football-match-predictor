@@ -1,0 +1,100 @@
+name: football-predictor
+
+services:
+  db:
+    image: postgres:16
+    command: ["postgres", "-c", "max_connections=200"]
+    environment:
+      POSTGRES_DB: football
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d football"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+
+  api:
+    build: ./python-server
+    env_file: ./python-server/.env
+    environment:
+      DB_POOL_SIZE: "20"
+      DB_MAX_OVERFLOW: "40"
+      DB_POOL_TIMEOUT: "30"
+      DB_POOL_RECYCLE: "1800"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./python-server:/app
+      - ./football.json-master:/data/football.json-master:ro
+      - ./reports:/reports
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys; resp=urllib.request.urlopen('http://localhost:8000/health', timeout=2); sys.exit(0 if resp.getcode()==200 else 1)\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  notebook:
+    build: ./python-server
+    env_file: ./python-server/.env
+    environment:
+      PYTHONPATH: /app
+    depends_on:
+      db:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - ./python-server:/app
+      - ./football.json-master:/data/football.json-master:ro
+      - ./reports:/reports
+    ports:
+      - "8888:8888"
+    command: >
+      bash -lc "jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+      --ServerApp.root_dir=/app --ServerApp.token='' --ServerApp.password=''"
+
+
+
+
+  frontend:
+    build: ./react-server
+    environment:
+      VITE_API_URL: http://localhost:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./react-server:/app
+      - /app/node_modules
+    command: >
+      bash -lc "if [ ! -d node_modules ] || [ ! -d node_modules/vitest ]; then npm ci; fi;
+      npm run dev -- --host 0.0.0.0 --port 5173"
+
+  k6:
+    image: grafana/k6
+    profiles: ["perf"]
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://api:8000
+    volumes:
+      - ./scripts/perf:/scripts/perf:ro
+      - ./reports:/reports
+    command: ["run", "/scripts/perf/k6.js", "--summary-export", "/reports/k6_summary.json"]
+
+ 
