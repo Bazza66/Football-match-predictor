@@ -45,3 +45,6 @@ python-server/.Trash-0/
 python-server/.ipynb_checkpoints/
 python-server/Untitled.ipynb
 python-server/.ipynb_checkpoints/*
+
+# Legacy Python virtual environment
+python-server/footy-env/
